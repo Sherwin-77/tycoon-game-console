@@ -22,7 +22,9 @@ class Anything:
 
 class Buff:
     def __init__(self, amount: int, duration: int, stack: int = 1) -> None:
-        self.amount = amount
+        if not all(isinstance(x, int) for x in [amount, duration, stack]):
+            raise TypeError("Amount, duration and stack must be integer")
+        self.__amount = amount
         self.duration = duration
         self.stack = stack
 
