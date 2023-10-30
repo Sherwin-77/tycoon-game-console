@@ -17,7 +17,7 @@ class Anything:
         return self._name
     
     def __str__(self) -> str:
-        return f"{self.__class__}: {self._name}"
+        return f"{self.__class__.__qualname__}: {self._name}"
 
 
 class Buff:
