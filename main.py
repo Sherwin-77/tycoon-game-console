@@ -2,19 +2,8 @@ from __future__ import annotations
 from typing import List
 from enum import Enum
 
-import asyncio
 from os import name, system
 import datetime
-import time
-
-
-# Utility to create function run every x second without blocking main program
-async def create_schedule(func ,interval: int = 5, *args, **kwargs):
-    while True:
-        await asyncio.gather(
-            asyncio.sleep(interval),
-            func(*args, **kwargs)
-        )
 
 
 # Utility for clear console screen
@@ -26,52 +15,6 @@ def clear():
     # for mac and linux(here, os.name is 'posix')
     else:
         _ = system('clear')
-
-
-class DisplayState:
-    """
-    Utility class for handling display state
-    """
-    def __init__(self, office: Office) -> None:
-        self.__pending = False
-        self.__result_input = None
-        self._office = office
-
-    async def get_input(self):
-        """
-        Utility to get input async. WIll return None if input already in progress
-        """
-        if not self.__pending:
-            loop = asyncio.get_event_loop()
-            self.__pending = True
-            self.__result_input = await loop.run_in_executor(None, input, "Select Option -> ")
-
-            try:
-                self.__result_input = int(self.__result_input)
-            except ValueError:
-                self.flush()
-                print("Invalid option")
-            else:
-                it = self.__result_input
-                self.flush()
-                return it
-        else:
-            return None
-    
-    def display(self):
-        print(self._office.display)
-        if self.__pending:
-            print("Select Option -> ", end='', flush=True)
-
-    # Utility to clear input. Normally should done automatically 
-    def flush(self):
-        self.__pending = None
-        self.__result_input = None
-
-    # Accessor in case result fails to get
-    @property
-    def result_input(self):
-        return self.__result_input
 
 
 class PositionType(Enum):
@@ -229,7 +172,7 @@ class Office(Anything):
         ]
         self.__effects: List[Buff] = []
         self.__buffs: List[Buff] = []
-        self.__last_claim = time.time()
+        self.__last_claim = datetime.datetime.now()
 
         self.update_effects()
 
@@ -250,10 +193,10 @@ class Office(Anything):
 
     # Collect based on time passed and incomes
     def collect(self):
-        cur = time.time()
+        cur = datetime.datetime.now()
         self.update_effects()
         self.update_income()
-        self.__budgets += round(self._income * (cur - self.__last_claim))
+        self.__budgets += round(self._income * (cur - self.__last_claim).total_seconds())
         self.__last_claim = cur
 
     @property
@@ -273,6 +216,9 @@ class Office(Anything):
 
     @property
     def display(self):
+        """
+        Get the display state from office. Automatically collect when accessed
+        """
         self.collect()
         f = '\n'.join([f"{x.name} - LVL {x.level}" for x in self.__facilities])
         b = '\n'.join([str(x) for x in self.buffs])
@@ -280,6 +226,7 @@ class Office(Anything):
             f"{self.name} - {self._address}\n"
             f"Current Income: {self.income} / HyperSecond\n"
             f"Current Budgets: {self.__budgets}\n"
+            f"Last collect: {self.__last_claim}\n"
             f"=== FACILITIES ===\n"
             f"{f}\n"
             f"=== ACTIVE BUFFS ===\n"
@@ -288,27 +235,23 @@ class Office(Anything):
 
 
 start_time = datetime.datetime.now()
-async def timer_task(state: DisplayState):
-    clear()
-    print(str((datetime.datetime.now() - start_time)).split('.')[0])
-    state.display()
-
-async def main(name, address):
+def main(name, address):
     office = Office(name, address)
-    state = DisplayState(office)
-    asyncio.create_task(create_schedule(timer_task, 15, state))  # Automatic refresh every 15 seconds
     while True:
         clear()
-        state.display()
-        opt = await state.get_input()
-        if opt is None:
-            continue
-        if opt == 0:
-            break
+        print(office.display)
+
+        opt = input("Select option -> ")
+        try:
+            opt = int(opt)
+        except ValueError:
+            print("Invalid option")
+        else:
+            pass
 
 
 if __name__ == "__main__":
     # Kode utama disini
     name = input("Choose your office name: ")
     address = input("Choose your office address: ")
-    asyncio.run(main(name, address))
+    main(name, address)
