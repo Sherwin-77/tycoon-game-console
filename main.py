@@ -3,8 +3,9 @@ from typing import Generator, List, Optional
 from enum import Enum
 
 import asyncio
-from collections import deque
+from collections import defaultdict, deque
 import datetime
+from functools import lru_cache
 from os import name, system
 import random
 import time
@@ -30,15 +31,21 @@ async def create_schedule(func ,interval: int = 5, *args, **kwargs):
         )
 
 
-# Utility for clear console screen
-def clear():
-    # for windows
-    if name == 'nt':
-        _ = system('cls')
- 
-    # for mac and linux(here, os.name is 'posix')
+# Utility to do exponentiation with integer only
+@lru_cache()
+def exponentiation(base: int, exp: int) -> int:
+    if (exp == 0):
+        return 1
+    if (exp == 1):
+        return base
+     
+    t = exponentiation(base, exp // 2);
+    t *= t
+     
+    if (exp % 2 == 0):
+        return t
     else:
-        _ = system('clear')
+        return base * t 
 
 
 class DisplayState:
@@ -51,6 +58,8 @@ class DisplayState:
         self._office = office
         self._input_menu = MENU
         self._errors = None
+        self._pending_clear = False
+        self.__lock = asyncio.Lock()
 
     # Accessor in case result fails to get
     @property
@@ -86,13 +95,33 @@ class DisplayState:
     def set_error(self, error):
         self._errors = error
 
-    def display(self):
+    # Utility for clear console screen. Usually called automatically
+    def clear(self):
+        # for windows
+        if name == 'nt':
+            _ = system('cls')
+    
+        # for mac and linux(here, os.name is 'posix')
+        else:
+            _ = system('clear')
+        
+    async def display(self):
+        """
+        Display the game info. Will automatically call `DisplayState.clear()`
+        """
+        async with self.__lock:
+            if self._pending_clear:
+                return
+            self._pending_clear = True
+        await asyncio.sleep(0.5)
+        self.clear()
         print(self._office.display)
         if self._errors is not None:
             print("ERROR:", self._errors)
         if self.__pending:
             print(self._input_menu)
             print("Select Option -> ", end='', flush=True)
+        self._pending_clear = False
 
     # Utility to clear input. Normally should done automatically 
     def flush(self):
@@ -190,10 +219,10 @@ class StaticBuff(Buff):
 
     # Default activate will goes increase the income directly
     def activate(self):
-        self._office.income = round(self._office.income * (1+((self._amount * self._stack)/100)))
+        self._office.income += self._office.income * (self._amount * self._stack)//500
 
     def __str__(self) -> str:
-        return f"{self.name} x{self._stack} (INCOME UP {self._amount}%)"
+        return f"{self.name} x{self._stack} (INCOME UP {self._amount//5}%)"
 
 
 class TimedBuff(StaticBuff):
@@ -208,12 +237,11 @@ class TimedBuff(StaticBuff):
             raise TypeError("Duration must be int")
         if not isinstance(state, DisplayState):
             raise TypeError("State must be class of DisplayState")
-        self.__start = time.time()
+        self._start = time.time()
         self._duration = duration
         self._state = state
         self._running = False
 
-    
     @property
     def name(self) -> str:
         return "Limited Buff"
@@ -223,8 +251,7 @@ class TimedBuff(StaticBuff):
         await self._office.collect()
         self._office.remove_buff(self)
         self._office.update_income()
-        clear()
-        self._state.display()
+        await self._state.display()
 
     def activate(self):
         if not self._running:
@@ -233,8 +260,8 @@ class TimedBuff(StaticBuff):
         super().activate()
 
     def __str__(self) -> str:
-        diff = time.time() - self.__start
-        return f"{self.name} x{self._stack} (INCOME UP {self._amount}%) - {round(self._duration - diff)} seconds left"
+        diff = time.time() - self._start
+        return f"{self.name} x{self._stack} (INCOME UP {self._amount//5}%) - {round(self._duration - diff)} seconds left"
 
 
 # Below is specific skill for staff
@@ -242,12 +269,15 @@ class DoubleIncome(TimedBuff):
     """
     Buff that doubles the current income. When stacked, will be multiplied by stacks+1 instead
     """
+    @property
+    def name(self) -> str:
+        return "Rewind Time"
     def activate(self):
         if not self._running:
             asyncio.create_task(self._do_timeout())
             self._running = True
-        self._office.income = round(self._office.income * (1 + self.stack) * round(self._office.income * (1+((self._amount)/100))))
-        
+
+        self._office.income += (self._office.income * (1 + self.stack))
 
 class RewindTime(TimedBuff):
     """
@@ -264,8 +294,7 @@ class RewindTime(TimedBuff):
         await self._office.collect()
         self._office.remove_buff(self)
         self._office.update_income()
-        clear()
-        self._state.display()
+        await self._state.display()
         # Back to original time of last claim
         self._office.last_claim = original_time
 
@@ -273,11 +302,11 @@ class RewindTime(TimedBuff):
         if not self._running:
             # Rewind time of last claim
             self._office.last_claim = self._office.last_claim - ((self._duration + self.amount) * self._stack)
-            asyncio.create_task(self._do_timeout(self._office.__last_claim))
+            asyncio.create_task(self._do_timeout(self._office.last_claim))
             self._running = True
 
     def __str__(self) -> str:
-        diff = time.time() - self.__start
+        diff = time.time() - self._start
         return f"{self.name} x{self._stack} - {round(((self._duration + self.amount) * self._stack) - diff)} seconds until back to present time"
 
 
@@ -291,12 +320,14 @@ class ExtraBudget(TimedBuff):
 
     async def _do_timeout(self):
         await super()._do_timeout()
-        self._office.budgets += round(self._office.budgets * (self._amount * self._stack)/100)
+        self._office.budgets += self._office.budgets * (self._amount * self._stack)//500
 
 
 class Staff(Anything):
     """
-    This will be base class representing of staff
+    This will be class representing of staff
+
+    When initialized, this will registered as office staff. Thus increasing the office staff income
     """
     def __init__(self, name: str, age: int, office: Office, position: PositionType) -> None:
         super().__init__(name)
@@ -326,30 +357,31 @@ class Staff(Anything):
             raise TypeError("State must be from class DisplayState")
         # Position 2 staff have TimedBuff increase
         if self.position.value >= 2:
-            self.__office.add_buff(TimedBuff(self.__office, random.randint(5, 15), random.choices([3, 2, 1], weights=[0.5, 4.5, 95])[0], 10, state))
+            self.__office.add_buff(TimedBuff(self.__office, random.randint(5, 20), random.choices([3, 2, 1], weights=[0.5, 4.5, 95])[0], 10, state))
         # Position 3 staff have 10% chance to trigger unique skill
         if self.position.value >= 3 and random.random() < 0.10:
             # Since all the unique skill inherit TimedBuff, we can 'hack' using duck typing
             tb = random.choice([DoubleIncome, RewindTime, ExtraBudget])
-            self.__office.add_buff(tb(self.__office, random.randint(15, 30), random.choices([3, 2, 1], weights=[0.1, 3, 96.9])[0], 20, state))
-            self.__office.add_log(f"{self.name} Successfully trigger skill, created {tb.name} Buff")
+            buff = tb(self.__office, random.randint(15, 30), random.choices([3, 2, 1], weights=[0.1, 3, 96.9])[0], 20, state)
+            self.__office.add_buff(buff)
+            self.__office.add_log(f"{self.name} Successfully trigger skill, created {buff.name} Buff")
 
 
 class Facility(Anything):
     """
     `Facility` class for `Office`. Usually predefined
     """
-    def __init__(self, name: str, base_cost: int,  effects: List[StaticBuff], r_factors: float = 105/100) -> None:
+    def __init__(self, name: str, base_cost: int,  effects: List[StaticBuff], r_percent: int) -> None:
         super().__init__(name)
 
         if not isinstance(base_cost, int):
             raise TypeError("Base cost must be int")
-        if not isinstance(r_factors, float):
+        if not isinstance(r_percent, int):
             raise TypeError("R Factors must be float")
         if not isinstance(effects, list):
             raise TypeError("Effects must be list")
-        if r_factors < 1:
-            raise ValueError("R Factors must be greater than 1")
+        if r_percent < 1:
+            raise ValueError("R Percents must be greater than 1")
         for e in effects:
             if not isinstance(e, StaticBuff):
                 raise TypeError("List of effects must be StaticBuff")
@@ -357,13 +389,18 @@ class Facility(Anything):
                 raise NotImplementedError("Timed buff as effects is not supported yet")
 
         self._level = 1
+        self._cached_cost = (1, base_cost)
         self._base_cost = base_cost
         self.__effects = effects
-        self.R = r_factors
+        self.R = r_percent
     
     @property
     def cost(self) -> int:
-        return round((self._base_cost * (self.R**self.level - 1)/(self.R - 1)))
+        if self._level == self._cached_cost[0]:
+            return self._cached_cost[1]
+        c = (self._base_cost * (exponentiation(self.R, self.level) - exponentiation(100, self.level))) // ((self.R * exponentiation(100, self.level-1)) - exponentiation(100, self.level))
+        self._cached_cost = (self._level, c)
+        return c
 
     @property
     def effects(self) -> List[StaticBuff]:
@@ -376,7 +413,7 @@ class Facility(Anything):
     def upgrade(self) -> None:
         self._level += 1
         for x in self.__effects:
-            x.amount += 1
+            x.amount += 4
             if self._level % 10 == 0:
                 x.stack += 1
 
@@ -396,11 +433,12 @@ class Office(Anything):
         self.__base_income = 10
         self._income = self.__base_income
 
-        self.__budgets = 1000
+        self.__budgets = 1600
         self.__facilities: List[Facility] = [
-            Facility("Chair", 50, [StaticBuff(self, 6, 1)], 150/100),
-            Facility("Table", 100, [StaticBuff(self, 11, 1)], 175/100),
-            Facility("PC", 200, [StaticBuff(self, 11, 1), StaticBuff(self, 6, 2)], 200/100)
+            Facility("Chair", 50, [StaticBuff(self, 5, 1)], 150),
+            Facility("Table", 100, [StaticBuff(self, 10, 1)], 175),
+            Facility("PC", 200, [StaticBuff(self, 10, 1), StaticBuff(self, 5, 2)], 200),
+            Facility("Toilet", 350, [StaticBuff(self, 10, 1), StaticBuff(self, 10, 2), StaticBuff(self, 5, 3)], 300)
         ]
         self.__logs: deque[str] = deque()
         self.__effects: List[Buff] = []
@@ -472,8 +510,11 @@ class Office(Anything):
         if not isinstance(val, float):
             raise TypeError("Last claim time setter must be float")
         self.__last_claim = val
+
+    def get_buff_size(self) -> int:
+        return len(self.__buffs) + len(self.__effects)
     
-    def get_staff_cost(self, bulk_10: bool = False):
+    def get_staff_cost(self, bulk_10: bool = False) -> int:
         if not isinstance(bulk_10, bool):
             raise TypeError("Bulk 10 option must be boolean")
         if bulk_10:
@@ -495,8 +536,23 @@ class Office(Anything):
 
     @property
     def display(self):
-        f = ''.join([f"{i}. {x.name} - LVL {x.level} [{x.cost} for next upgrade]" + ('\n' if (i+1)%2 else '\t') for i, x in enumerate(self.__facilities, start=1)])
-        b = '\n'.join([str(x) for x in self.buffs])
+        f = ''.join([f"{i}) {x.name} - LVL {x.level} [{x.cost} for next upgrade]" + ('\n' if (i+1)%2 else '\t') for i, x in enumerate(self.__facilities, start=1)])
+        b = ''
+        sz = self.get_buff_size()
+        # Truncate the output when buff amount more than 10
+        if sz > 10:
+            hashmap = defaultdict(int)
+            for x in self.buffs:
+                if type(x) == StaticBuff:
+                    hashmap["Stats Buff"] += 1
+                elif type(x) == TimedBuff:
+                    hashmap["Timed Buff"] += 1
+                else:
+                    hashmap[x.name] += 1
+            for k, v in hashmap.items():
+                b += f"{k} - {v} Total\n"
+        else:
+            b = '\n'.join([str(x) for x in self.buffs])
         l = '\n'.join(self.__logs)
         tm = str((datetime.datetime.now() - START_TIME)).split('.')[0]
         return (  
@@ -505,15 +561,15 @@ class Office(Anything):
             f"Current Income: {self.income} / HyperSecond\n"
             f"Current Budgets: {self.__budgets}\n"
             f"=== FACILITIES ===\n"
-            f"{f}\n"
+            f"{f.strip()}\n"
             f"=== STAFFS ===\n"
             f"Leader\t\t: {self.__staff_info['leader']}\n"
             f"Manager\t\t: {self.__staff_info['manager']}\n"
             f"Consultant\t: {self.__staff_info['consultant']}\n"
             f"=== ACTIVE BUFFS & EFFECTS ===\n"
-            f"{b}\n"
+            f"{b.strip()}\n"
             f"=== LOGS ===\n"
-            f"{l}\n"
+            f"{l.strip()}"
         )
     
     def add_buff(self, buff: Buff):
@@ -562,7 +618,7 @@ class Office(Anything):
 
     # Method to update effect from facilities. Usually done automatically
     def update_effects(self):
-        self.__effects = []
+        self.__effects.clear()
         for x in self.__facilities:
             self.__effects.extend(x.effects)
     
@@ -571,6 +627,7 @@ class Office(Anything):
         self._income = self.__base_income
         for x in self.buffs:
             x.activate()
+        self._income += self._staff_income
 
     def upgrade_facility(self):
         """
@@ -611,22 +668,26 @@ class Office(Anything):
             Staff(next(self.__name_gen), random.randint(18, 55), self, x) 
             for x in random.choices([PositionType.LEADER, PositionType.MANAGER, PositionType.CONSULTANT], weights=[0.5, 3, 96.5], k=(10 if bulk_10 else 1))
         ]
+        arr = []
         s2 = 0
         for x in st:
             if x.position == PositionType.LEADER:
                 self.add_log("You successfully hired rank 3 Leader staff!")
                 self.__staff_info["leader"] += 1
+                arr.append(x)
             elif x.position == PositionType.MANAGER:
                 self.__staff_info["manager"] += 1
                 s2 += 1
+                arr.append(x)
             else:
+                # Here we drop level 1 staff to save memory & looping time since their role is just adding into staff_income
                 self.__staff_info["consultant"] += 1
             self._staff_counts += 1
         if s2 > 0:
             self.add_log(f"hired {s2} rank 2 Manager staff")
         self.__budgets -= cost
-        self._staff_cost = 160 * (2 ** (self._staff_counts//10))
-        self.__staffs.extend(st)
+        self._staff_cost = 180 * (3 ** (self._staff_counts//10))
+        self.__staffs.extend(arr)
 
     async def collect(self):
         """
@@ -636,29 +697,30 @@ class Office(Anything):
             cur = time.time()
             self.update_effects()
             self.update_income()
-            self.income += self._staff_income
-            self.add_log(f"Collect {round(self._income * (cur - self.__last_claim))}")
-            self.__budgets += round(self._income * (cur - self.__last_claim))
+            cl = self._income * round(cur - self.__last_claim)
+            if cl == 0:
+                return
+            self.add_log(f"Collect {cl}")
+            self.__budgets += self._income * round(cur -self.__last_claim)
             self.__last_claim = cur
 
 
 async def timer_task(state: DisplayState, office: Office):
     office.use_staff_skill(state)
     await office.collect()
-    clear()
-    state.display()
+    await state.display()
 
 
 async def main(name, address):
     office = Office(name, address)
     state = DisplayState(office)
     asyncio.create_task(create_schedule(timer_task, 30, state, office))  # Automatic refresh every 30 seconds
-    office.add_buff(TimedBuff(office, 69, 1, 30, state))
+    office.add_buff(TimedBuff(office, 70, 1, 30, state))
     upgrader = office.upgrade_facility()  # Set coroutine upgrade facility
     next(upgrader)
     while True:
-        clear()
-        state.display()
+        office.update_income()
+        await state.display()
         opt = await state.get_input(MENU)
         if opt is None:
             continue
@@ -675,7 +737,7 @@ async def main(name, address):
                 upgrader = office.upgrade_facility()  # Set new coroutine when error
                 next(upgrader)
         elif opt == 2:
-            opt = await state.get_input("1. 1x hire\n2. 10x hire")
+            opt = await state.get_input(f"1. 1x hire [{office.get_staff_cost()}]\n2. 10x hire [{office.get_staff_cost(True)}]")
             try:
                 if opt is None:
                     continue
