@@ -508,7 +508,7 @@ class Office:
             raise TypeError("Bulk 10 option must be boolean")
         if bulk_10:
             a = 10 - (self._staff_counts % 10) 
-            return (self._staff_cost * a) + (self._staff_cost * 2 * (10-a))
+            return (self._staff_cost * a) + (self._staff_cost * 3 * (10-a))
         else:
             return self._staff_cost
 
