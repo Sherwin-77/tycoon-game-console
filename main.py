@@ -1,4 +1,5 @@
 from __future__ import annotations
+from abc import ABC, abstractmethod
 from typing import Generator, List, Optional
 from enum import Enum
 
@@ -23,7 +24,7 @@ class NotEnoughBudget(Exception):
 
 
 # Utility to create function run every x second without blocking main program
-async def create_schedule(func ,interval: int = 5, *args, **kwargs):
+async def create_schedule(func, interval: int = 5, *args, **kwargs):
     while True:
         await asyncio.gather(
             asyncio.sleep(interval),
@@ -46,6 +47,20 @@ def exponentiation(base: int, exp: int) -> int:
         return t
     else:
         return base * t 
+
+
+# Utility to create incremental name with generator
+def name_generator():
+    cur_staff_id = 1
+    while True:
+        yield f"Staff-{cur_staff_id}"
+        cur_staff_id += 1
+
+
+class PositionType(Enum):
+    CONSULTANT = 1
+    MANAGER = 2
+    LEADER = 3
 
 
 class DisplayState:
@@ -129,44 +144,15 @@ class DisplayState:
         self.__result_input = None
         self._errors = None
 
-def name_generator():
-    cur_staff_id = 1
-    while True:
-        yield f"Staff-{cur_staff_id}"
-        cur_staff_id += 1
 
-
-class PositionType(Enum):
-    CONSULTANT = 1
-    MANAGER = 2
-    LEADER = 3
-
-
-class Anything:
-    """
-    Base class for anything with name property
-    """
-    def __init__(self, name: str) -> None:
-        if not isinstance(name, str):
-            raise TypeError("Name must be string")
-
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
-    
-    def __str__(self) -> str:
-        return f"{self.__class__.__qualname__}: {self._name}"
-
-
-class Buff:
+class Buff(ABC):
     """
     Abstract base class for any buff
     """
     
+    @abstractmethod
     def activate(self):
-        raise NotImplementedError("Buff must be inherited")
+        pass
 
     @property
     def name(self) -> str:
@@ -279,6 +265,7 @@ class DoubleIncome(TimedBuff):
 
         self._office.income += (self._office.income * (1 + self.stack))
 
+
 class RewindTime(TimedBuff):
     """
     Buff that freezes and rewind the current time and revert when time out
@@ -323,15 +310,15 @@ class ExtraBudget(TimedBuff):
         self._office.budgets += self._office.budgets * (self._amount * self._stack)//500
 
 
-class Staff(Anything):
+class Staff:
     """
     This will be class representing of staff
 
     When initialized, this will registered as office staff. Thus increasing the office staff income
     """
     def __init__(self, name: str, age: int, office: Office, position: PositionType) -> None:
-        super().__init__(name)
-
+        if not isinstance(name, str):
+            raise TypeError("Name must be string")
         if not isinstance(age, int):
             raise TypeError("Age must be integer")
         if not isinstance(position, PositionType):
@@ -339,6 +326,7 @@ class Staff(Anything):
         if not isinstance(office, Office):
             raise TypeError("Office must be class Office")
 
+        self.name = name
         self._age = age
         self.__office = office
         self.__position = position
@@ -367,13 +355,13 @@ class Staff(Anything):
             self.__office.add_log(f"{self.name} Successfully trigger skill, created {buff.name} Buff")
 
 
-class Facility(Anything):
+class Facility:
     """
     `Facility` class for `Office`. Usually predefined
     """
     def __init__(self, name: str, base_cost: int,  effects: List[StaticBuff], r_percent: int) -> None:
-        super().__init__(name)
-
+        if not isinstance(name, str):
+            raise TypeError("Name must be string")
         if not isinstance(base_cost, int):
             raise TypeError("Base cost must be int")
         if not isinstance(r_percent, int):
@@ -388,6 +376,7 @@ class Facility(Anything):
             if isinstance(e, TimedBuff):
                 raise NotImplementedError("Timed buff as effects is not supported yet")
 
+        self.name = name
         self._level = 1
         self._cached_cost = (1, base_cost)
         self._base_cost = base_cost
@@ -418,16 +407,16 @@ class Facility(Anything):
                 x.stack += 1
 
 
-class Office(Anything):
+class Office:
     """
     Main class for saving any state of game
     """
     def __init__(self, name: str, address: str) -> None:
-        super().__init__(name)
-
+        if not isinstance(name, str):
+            raise TypeError("Name must be string")
         if not isinstance(address, str):
             raise TypeError("Address must be string")
-
+        self.name = name
         self._address = address
 
         self.__base_income = 10
